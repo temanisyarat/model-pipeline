@@ -33,14 +33,13 @@ def train_tf_model(
         clipnorm=CONFIG.get("gradient_clip_norm", 1.0),
     )
 
-    # Implement label smoothing by wrapping CategoricalCrossentropy
     cce = tf.keras.losses.CategoricalCrossentropy(
         from_logits=True,
         label_smoothing=CONFIG.get("label_smoothing", 0.1),
     )
 
     def loss_fn(y_true, y_pred):
-        y_true_one_hot = tf.one_hot(tf.cast(tf.squeeze(y_true), tf.int32), num_classes)
+        y_true_one_hot = tf.one_hot(tf.cast(y_true, tf.int32), num_classes)
         return cce(y_true_one_hot, y_pred)
 
     model.compile(

@@ -1,10 +1,12 @@
 import time
 import numpy as np
 import tensorflow as tf
-from pathlib import Path
+from ai_edge_litert.interpreter import Interpreter
 
 
-def convert_saved_model_to_tflite(saved_model_dir, output_path, CONFIG, input_dim, quantization='fp16'):
+def convert_saved_model_to_tflite(
+    saved_model_dir, output_path, CONFIG, input_dim, quantization="fp16"
+):
     """Convert TensorFlow SavedModel to TFLite format."""
     print(f"Converting to TFLite with quantization='{quantization}'...")
 
@@ -12,18 +14,18 @@ def convert_saved_model_to_tflite(saved_model_dir, output_path, CONFIG, input_di
 
     converter.target_spec.supported_ops = [
         tf.lite.OpsSet.TFLITE_BUILTINS,
-        tf.lite.OpsSet.SELECT_TF_OPS
+        tf.lite.OpsSet.SELECT_TF_OPS,
     ]
     converter._experimental_lower_tensor_list_ops = False
 
-    if quantization == 'dynamic':
+    if quantization == "dynamic":
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    elif quantization == 'int8':
+    elif quantization == "int8":
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
         converter.representative_dataset = lambda: [
-            [tf.random.normal((1, CONFIG['max_len'], input_dim))]
+            [tf.random.normal((1, CONFIG["max_len"], input_dim))]
         ]
-    elif quantization == 'fp16':
+    elif quantization == "fp16":
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
         converter.target_spec.supported_types = [tf.float16]
 
@@ -52,22 +54,28 @@ def benchmark_tf_model(model, input_dim, max_len, n_runs=100):
         times.append((time.perf_counter() - start) * 1000)
 
     return {
-        'ms_per_sample': round(float(np.mean(times)), 3),
-        'fps': round(1000 / float(np.mean(times)), 1),
+        "ms_per_sample": round(float(np.mean(times)), 3),
+        "fps": round(1000 / float(np.mean(times)), 1),
     }
 
 
 def benchmark_tflite_model(tflite_path, n_runs=100):
     """Benchmark TFLite model inference."""
-    interpreter = tf.lite.Interpreter(model_path=str(tflite_path))
-    flex_delegate = tf.lite.experimental.load_delegate('libtensorflowlite_flex_delegate.so')
-    interpreter.add_delegate(flex_delegate)
-    interpreter.allocate_tensors()
+    try:
+        interpreter = Interpreter(model_path=str(tflite_path))
+        interpreter.allocate_tensors()
+    except RuntimeError as e:
+        print(
+            f"Skipping TFLite benchmark. The model requires Flex delegate for SELECT_TF_OPS: {
+                e
+            }"
+        )
+        return None
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    input_shape = input_details[0]['shape']
+    input_shape = input_details[0]["shape"]
     print(f"Detected TFLite input shape: {input_shape}")
 
     dummy_input = np.random.randn(*input_shape).astype(np.float32)
@@ -75,13 +83,13 @@ def benchmark_tflite_model(tflite_path, n_runs=100):
     times = []
     for _ in range(n_runs):
         start = time.perf_counter()
-        interpreter.set_tensor(input_details[0]['index'], dummy_input)
+        interpreter.set_tensor(input_details[0]["index"], dummy_input)
         interpreter.invoke()
-        _ = interpreter.get_tensor(output_details[0]['index'])
+        _ = interpreter.get_tensor(output_details[0]["index"])
         times.append((time.perf_counter() - start) * 1000)
 
     return {
-        'mean_ms': round(np.mean(times), 3),
-        'std_ms': round(np.std(times), 3),
-        'fps': round(1000 / np.mean(times), 1),
+        "mean_ms": round(np.mean(times), 3),
+        "std_ms": round(np.std(times), 3),
+        "fps": round(1000 / np.mean(times), 1),
     }
