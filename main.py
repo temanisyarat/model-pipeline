@@ -35,7 +35,6 @@ def main():
     all_paths, all_labels, all_signer_ids = scan_dataset_with_signers(DATA_DIR)
     label_encoder_global = LabelEncoder()
     label_encoder_global.fit(all_labels)
-    num_classes_global = len(label_encoder_global.classes_)
     print(f"Global classes: {list(label_encoder_global.classes_)}")
 
     unique_signers = sorted(set(all_signer_ids))
@@ -51,8 +50,8 @@ def main():
 
     train_ds, val_ds, label_encoder, num_classes, signer_info = build_tf_dataloaders(
         DATA_DIR,
-        max_len=CONFIG['max_len'],
-        batch_size=CONFIG['batch_size'],
+        max_len=CONFIG["max_len"],
+        batch_size=CONFIG["batch_size"],
         k_folds=K_FOLDS,
         current_fold=CURRENT_FOLD,
         le_fitted=label_encoder_global,
@@ -60,11 +59,16 @@ def main():
     )
 
     test_paths = [p for p, s in zip(all_paths, all_signer_ids) if s == TEST_SIGNER]
-    test_labels_list = [l for l, s in zip(all_labels, all_signer_ids) if s == TEST_SIGNER]
+    test_labels_list = [
+        l for l, s in zip(all_labels, all_signer_ids) if s == TEST_SIGNER
+    ]
     test_ds = create_tf_dataset(
-        test_paths, test_labels_list, label_encoder_global,
-        signer_info['global_mean'], signer_info['global_std'],
-        batch_size=CONFIG['batch_size'],
+        test_paths,
+        test_labels_list,
+        label_encoder_global,
+        signer_info["global_mean"],
+        signer_info["global_std"],
+        batch_size=CONFIG["batch_size"],
         shuffle=False,
         augment=False,
     )
@@ -72,22 +76,22 @@ def main():
 
     print("\nBuilding TensorFlow MobileSignGRU model...")
     input_dim = MODEL_INPUT_DIM
-    CONFIG['num_classes'] = num_classes
+    CONFIG["num_classes"] = num_classes
 
     model = build_mobile_sign_gru(
         input_dim=input_dim,
         num_classes=num_classes,
-        max_len=CONFIG['max_len'],
-        hidden_dim=CONFIG['hidden_dim'],
-        num_layers=CONFIG['num_layers'],
-        dropout=CONFIG['dropout'],
-        bidirectional=CONFIG['bidirectional'],
-        l2_reg=CONFIG.get('l2_reg', 1e-3),
-        conv_filters=CONFIG.get('conv_filters', [128, 128]),
-        conv_kernel_size=CONFIG.get('conv_kernel_size', 5),
-        spatial_dropout=CONFIG.get('spatial_dropout', 0.2),
-        recurrent_dropout=CONFIG.get('recurrent_dropout', 0.2),
-        use_mask_concat=CONFIG.get('use_mask_concat', True),
+        max_len=CONFIG["max_len"],
+        hidden_dim=CONFIG["hidden_dim"],
+        num_layers=CONFIG["num_layers"],
+        dropout=CONFIG["dropout"],
+        bidirectional=CONFIG["bidirectional"],
+        l2_reg=CONFIG.get("l2_reg", 1e-3),
+        conv_filters=CONFIG.get("conv_filters", [128, 128]),
+        conv_kernel_size=CONFIG.get("conv_kernel_size", 5),
+        spatial_dropout=CONFIG.get("spatial_dropout", 0.2),
+        recurrent_dropout=CONFIG.get("recurrent_dropout", 0.2),
+        use_mask_concat=CONFIG.get("use_mask_concat", True),
     )
     model.summary()
 
@@ -100,44 +104,54 @@ def main():
 
     steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
     if steps_per_epoch < 0:
-        n_train = len([s for s in all_signer_ids if s != TEST_SIGNER and s not in signer_info['val_signers']])
-        steps_per_epoch = max(1, n_train // CONFIG['batch_size'])
+        n_train = len(
+            [
+                s
+                for s in all_signer_ids
+                if s != TEST_SIGNER and s not in signer_info["val_signers"]
+            ]
+        )
+        steps_per_epoch = max(1, n_train // CONFIG["batch_size"])
 
     val_steps = tf.data.experimental.cardinality(val_ds).numpy()
     if val_steps < 0:
         val_steps = None
 
     model, history_obj = train_tf_model(
-        train_ds, val_ds, CONFIG, num_classes, input_dim,
-        steps_per_epoch, val_steps
+        train_ds, val_ds, CONFIG, num_classes, input_dim, steps_per_epoch, val_steps
     )
 
-    fold_results = [{'history': history_obj.history, 'accuracy': max(history_obj.history.get('val_accuracy', [0]))}]
+    fold_results = [
+        {
+            "history": history_obj.history,
+            "accuracy": max(history_obj.history.get("val_accuracy", [0])),
+        }
+    ]
     best_fold_idx = 0
 
-    best_history = fold_results[best_fold_idx].get('history', {})
-    np.save(OUTPUT_DIR / 'history.npy', best_history)
+    best_history = fold_results[best_fold_idx].get("history", {})
+    np.save(OUTPUT_DIR / "history.npy", best_history)
 
     CONFIG_for_export = {
-        'input_dim': input_dim,
-        'num_classes': num_classes,
-        'hidden_dim': CONFIG['hidden_dim'],
-        'num_layers': CONFIG['num_layers'],
-        'dropout': CONFIG['dropout'],
-        'bidirectional': CONFIG['bidirectional'],
-        'max_len': CONFIG['max_len'],
-        'l2_reg': CONFIG.get('l2_reg', 1e-3),
-        'conv_filters': CONFIG.get('conv_filters', [128, 128]),
-        'conv_kernel_size': CONFIG.get('conv_kernel_size', 5),
-        'use_mask_concat': CONFIG.get('use_mask_concat', True),
-        'spatial_dropout': CONFIG.get('spatial_dropout', 0.2),
-        'recurrent_dropout': CONFIG.get('recurrent_dropout', 0.2),
-        'num_params': int(model.count_params()),
-        'model_size_mb': round(model_size_mb, 3),
-        'label_classes': list(label_encoder.classes_),
+        "input_dim": input_dim,
+        "num_classes": num_classes,
+        "hidden_dim": CONFIG["hidden_dim"],
+        "num_layers": CONFIG["num_layers"],
+        "dropout": CONFIG["dropout"],
+        "bidirectional": CONFIG["bidirectional"],
+        "max_len": CONFIG["max_len"],
+        "l2_reg": CONFIG.get("l2_reg", 1e-3),
+        "conv_filters": CONFIG.get("conv_filters", [128, 128]),
+        "conv_kernel_size": CONFIG.get("conv_kernel_size", 5),
+        "use_mask_concat": CONFIG.get("use_mask_concat", True),
+        "spatial_dropout": CONFIG.get("spatial_dropout", 0.2),
+        "recurrent_dropout": CONFIG.get("recurrent_dropout", 0.2),
+        "num_params": int(model.count_params()),
+        "model_size_mb": round(model_size_mb, 3),
+        "label_classes": list(label_encoder.classes_),
     }
 
-    with open(OUTPUT_DIR / 'config.json', 'w') as f:
+    with open(OUTPUT_DIR / "config.json", "w") as f:
         json.dump(CONFIG_for_export, f, indent=2)
 
     print(f"Model history and CONFIG saved to {OUTPUT_DIR}")
@@ -159,26 +173,30 @@ def main():
     print(f"Model size in RAM: {model_size_mb:.2f} MB")
 
     print("\nBenchmarking TF model inference speed...")
-    bench_tf = benchmark_tf_model(model, input_dim, CONFIG['max_len'])
-    print(f"  TF Model: {bench_tf['ms_per_sample']:.3f} ms/sample ({bench_tf['fps']:.1f} fps)")
+    bench_tf = benchmark_tf_model(model, input_dim, CONFIG["max_len"])
+    print(
+        f"  TF Model: {bench_tf['ms_per_sample']:.3f} ms/sample ({
+            bench_tf['fps']:.1f} fps)"
+    )
 
     print("\nExporting to TFLite...")
-    saved_model_path = OUTPUT_DIR / 'tf_saved_model'
+    saved_model_path = OUTPUT_DIR / "tf_saved_model"
     model.export(saved_model_path)
     print(f"SavedModel exported to {saved_model_path}")
 
-    tflite_path = OUTPUT_DIR / 'model_int8.tflite'
+    tflite_path = OUTPUT_DIR / "model_fp16.tflite"
     tflite_file, tflite_size = convert_saved_model_to_tflite(
-        saved_model_path,
-        tflite_path,
-        CONFIG,
-        input_dim,
-        quantization='fp16'
+        saved_model_path, tflite_path, CONFIG, input_dim, quantization="fp16"
     )
 
     print("Benchmarking TFLite model...")
     tflite_bench = benchmark_tflite_model(tflite_path)
-    print(f"TFLite inference: {tflite_bench['mean_ms']:.3f} +/- {tflite_bench['std_ms']:.3f} ms ({tflite_bench['fps']:.1f} fps)")
+
+    if tflite_bench is not None:
+        print(
+            f"TFLite inference: {tflite_bench['mean_ms']:.3f} +/- {
+                tflite_bench['std_ms']:.3f} ms ({tflite_bench['fps']:.1f} fps)"
+        )
 
     print("\n" + "=" * 60)
     print("BISINDO SIGN LANGUAGE RECOGNITION - PIPELINE COMPLETE")
@@ -197,20 +215,25 @@ def main():
 
     print("\nPerformance:")
     print(f"   TF Inference:    {bench_tf['ms_per_sample']:.3f} ms/sample")
-    print(f"   TFLite Inference: {tflite_bench['mean_ms']:.3f} ms/sample")
+
+    if tflite_bench is not None:
+        print(f"   TFLite Inference: {tflite_bench['mean_ms']:.3f} ms/sample")
+    else:
+        print("   TFLite Inference: Benchmarking failed due to unsupported operations.")
 
     print("\nTest Evaluation:")
+
     print(f"   Accuracy:  {eval_results['accuracy']:.4f}")
     print(f"   F1-macro:  {eval_results['f1_macro']:.4f}")
     print(f"   Precision: {eval_results['precision']:.4f}")
     print(f"   Recall:    {eval_results['recall']:.4f}")
 
     print("\nOutput Files:")
-    for f in sorted(OUTPUT_DIR.glob('*')):
+    for f in sorted(OUTPUT_DIR.glob("*")):
         if f.is_file():
             size = f.stat().st_size / (1024 * 1024)
             print(f"   {f.name}: {size:.2f} MB")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
