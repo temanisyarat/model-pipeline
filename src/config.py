@@ -14,25 +14,33 @@ print(f"GPUs available: {len(tf.config.list_physical_devices('GPU'))}")
 
 
 CONFIG = {
-    'max_len': 100,
-    'batch_size': 128,
-    'input_dim': 252,
-    'num_classes': 5,
+    'max_len': 125,
+    'batch_size': 64,
+    'input_dim': 153,
+    'num_classes': 20,
     'hidden_dim': 192,
     'num_layers': 2,
-    'dropout': 0.25,
+    'dropout': 0.3,
+    'recurrent_dropout': 0.2,
     'bidirectional': True,
-    'learning_rate': 1e-3,
-    'epochs': 20,
-    'patience': 12,
+    'learning_rate': 3e-4,
+    'epochs': 100,
+    'patience': 20,
     'label_smoothing': 0.1,
+    'l2_reg': 1e-3,
+    'gradient_clip_norm': 1.0,
+    'conv_filters': [128, 128],
+    'conv_kernel_size': 5,
+    'use_mask_concat': True,
+    'spatial_dropout': 0.2,
 }
 
 BATCH_SIZE = int(CONFIG['batch_size'])
 MAX_LEN = int(CONFIG['max_len'])
 INPUT_DIM = int(CONFIG['input_dim'])
+MODEL_INPUT_DIM = int(CONFIG['input_dim'] * (2 if CONFIG.get('use_mask_concat', False) else 1))
 
-CLASSES = ['aku', 'apa', 'dia', 'kamu', 'siapa']
+CLASSES = ['aku', 'apel', 'ayah', 'besok', 'buku', 'dia', 'dua', 'hari ini', 'ibu', 'kamu', 'kuning', 'maaf', 'merah', 'nama', 'pisang', 'salam', 'satu', 'teman', 'terima kasih', 'tiga']
 
 DATASET_PATH = '.'
 BASE_DIR = Path(DATASET_PATH)

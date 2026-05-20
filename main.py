@@ -1,9 +1,10 @@
 import random
+import json
 import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import LabelEncoder
 
-from src.config import CONFIG, DATA_DIR, OUTPUT_DIR
+from src.config import CONFIG, DATA_DIR, OUTPUT_DIR, MODEL_INPUT_DIM
 from src.data import (
     scan_dataset_with_signers,
     build_tf_dataloaders,
@@ -54,7 +55,8 @@ def main():
         batch_size=CONFIG['batch_size'],
         k_folds=K_FOLDS,
         current_fold=CURRENT_FOLD,
-        le_fitted=label_encoder_global
+        le_fitted=label_encoder_global,
+        augment=True,
     )
 
     test_paths = [p for p, s in zip(all_paths, all_signer_ids) if s == TEST_SIGNER]
@@ -63,12 +65,13 @@ def main():
         test_paths, test_labels_list, label_encoder_global,
         signer_info['global_mean'], signer_info['global_std'],
         batch_size=CONFIG['batch_size'],
-        shuffle=False
+        shuffle=False,
+        augment=False,
     )
     print(f"Test set size: {len(test_paths)} samples")
 
     print("\nBuilding TensorFlow MobileSignGRU model...")
-    input_dim = CONFIG['input_dim']
+    input_dim = MODEL_INPUT_DIM
     CONFIG['num_classes'] = num_classes
 
     model = build_mobile_sign_gru(
@@ -79,6 +82,12 @@ def main():
         num_layers=CONFIG['num_layers'],
         dropout=CONFIG['dropout'],
         bidirectional=CONFIG['bidirectional'],
+        l2_reg=CONFIG.get('l2_reg', 1e-3),
+        conv_filters=CONFIG.get('conv_filters', [128, 128]),
+        conv_kernel_size=CONFIG.get('conv_kernel_size', 5),
+        spatial_dropout=CONFIG.get('spatial_dropout', 0.2),
+        recurrent_dropout=CONFIG.get('recurrent_dropout', 0.2),
+        use_mask_concat=CONFIG.get('use_mask_concat', True),
     )
     model.summary()
 
@@ -117,12 +126,17 @@ def main():
         'dropout': CONFIG['dropout'],
         'bidirectional': CONFIG['bidirectional'],
         'max_len': CONFIG['max_len'],
+        'l2_reg': CONFIG.get('l2_reg', 1e-3),
+        'conv_filters': CONFIG.get('conv_filters', [128, 128]),
+        'conv_kernel_size': CONFIG.get('conv_kernel_size', 5),
+        'use_mask_concat': CONFIG.get('use_mask_concat', True),
+        'spatial_dropout': CONFIG.get('spatial_dropout', 0.2),
+        'recurrent_dropout': CONFIG.get('recurrent_dropout', 0.2),
         'num_params': int(model.count_params()),
         'model_size_mb': round(model_size_mb, 3),
         'label_classes': list(label_encoder.classes_),
     }
 
-    import json
     with open(OUTPUT_DIR / 'config.json', 'w') as f:
         json.dump(CONFIG_for_export, f, indent=2)
 
