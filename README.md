@@ -170,9 +170,9 @@ If you use this work in your research, please cite:
 ```bibtex
 @software{temanisyarat_model,
   title = {TemanIsyarat: BISINDO Recognition Model Pipeline},
-  author = {William Utomo and contributors},
-  url = {https://github.com/williamu04/temanisyarat-model-pipeline},
-  year = {2025}
+  author = {Temanisyarat Team and contributors},
+  url = {https://github.com/temanisyarat/model-pipeline},
+  year = {2026}
 }
 ```
 
