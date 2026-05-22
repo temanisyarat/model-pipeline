@@ -1,25 +1,10 @@
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import KFold
 
 from src.config import MAX_LEN, MODEL_INPUT_DIM, BATCH_SIZE
-
-
-def extract_features(npz_path):
-    data = np.load(npz_path)
-    pose = data["pose"]
-    hands = data["hands"]
-    T = pose.shape[0]
-    pose_xyz = pose[:, :, :3]
-    hands_flat = hands.reshape(T, -1)
-    feat = np.concatenate(
-        [
-            pose_xyz.reshape(T, -1),
-            hands_flat,
-        ],
-        axis=1,
-    )
-    return feat.astype(np.float32)
 
 
 def extract_features_with_mask(npz_path):
@@ -49,10 +34,6 @@ def pad_or_truncate(seq, max_len):
     return out, actual_len
 
 
-def fill_nan(seq):
-    return np.nan_to_num(seq, nan=0.0).astype(np.float32)
-
-
 def scan_dataset_with_signers(root_dir):
     root = Path(root_dir)
     paths, labels, signer_ids = [], [], []
@@ -69,18 +50,6 @@ def scan_dataset_with_signers(root_dir):
                 labels.append(class_name)
                 signer_ids.append(signer_id)
     return paths, labels, signer_ids
-
-
-def scan_dataset(root_dir):
-    root = Path(root_dir)
-    paths, labels = [], []
-    for class_dir in sorted(root.iterdir()):
-        if not class_dir.is_dir():
-            continue
-        for npz in sorted(class_dir.glob("*.npz")):
-            paths.append(str(npz))
-            labels.append(class_dir.name)
-    return paths, labels
 
 
 def split_by_signers(paths, labels, signer_ids, val_signers):
@@ -209,8 +178,6 @@ def build_tf_dataloaders(
     augment=True,
 ):
     paths, labels, signer_ids = scan_dataset_with_signers(root_dir)
-    from sklearn.preprocessing import LabelEncoder
-    from sklearn.model_selection import KFold
 
     le = le_fitted if le_fitted is not None else LabelEncoder().fit(labels)
     unique_signers = sorted(set(signer_ids))

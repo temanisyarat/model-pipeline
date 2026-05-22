@@ -20,6 +20,7 @@ from src.evaluate import (
 )
 from src.export import (
     convert_saved_model_to_tflite,
+    export_selfcontained_tflite,
     benchmark_tf_model,
     benchmark_tflite_model,
 )
@@ -189,6 +190,15 @@ def main():
         saved_model_path, tflite_path, CONFIG, input_dim, quantization="fp16"
     )
 
+    print("\nExporting self-contained TFLite (accepts raw landmarks)...")
+    export_selfcontained_tflite(
+        model=model,
+        data_paths=all_paths,
+        config=CONFIG_for_export,
+        output_dir=OUTPUT_DIR,
+        quantize="fp16",
+    )
+
     print("Benchmarking TFLite model...")
     tflite_bench = benchmark_tflite_model(tflite_path)
 
@@ -212,6 +222,7 @@ def main():
     print("\nModel Sizes:")
     print(f"   TF SavedModel (FP32): {model_size_mb:.2f} MB")
     print(f"   TFLite (FP16):        {tflite_size:.2f} MB")
+    print(f"   TFLite Raw Input:     model_raw_fp16.tflite")
 
     print("\nPerformance:")
     print(f"   TF Inference:    {bench_tf['ms_per_sample']:.3f} ms/sample")
