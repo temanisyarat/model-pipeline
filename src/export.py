@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
-from ai_edge_litert.interpreter import Interpreter
 
 
 def compute_global_stats(paths, max_len):
@@ -64,21 +63,12 @@ def export_selfcontained_tflite(
     config,
     output_dir,
     saved_model_dir="output/tf_saved_model",
-    quantize="fp16",
 ):
     """Wrap a trained model with raw-input preprocessing and export to TFLite.
 
     The resulting model accepts raw (125, 153) landmarks (with NaNs for
     undetected keypoints) and handles NaN detection, masking, and
     normalization internally -- no external preprocessing needed.
-
-    Args:
-        model: Compiled/trained Keras model (or None to rebuild from SavedModel).
-        data_paths: List of .npz file paths for computing normalization stats.
-        config: Training configuration dict.
-        output_dir: Output directory path.
-        saved_model_dir: Path to SavedModel (used if model is None).
-        quantize: 'fp16' or None.
     """
     output_dir = Path(output_dir)
     max_len = int(config["max_len"])
@@ -141,22 +131,16 @@ def export_selfcontained_tflite(
     outputs = model(preprocessed)
     wrapper = tf.keras.Model(raw_input, outputs, name="mobilesign_gru_raw")
 
-    # ---- Convert to TFLite ----
+    # ---- Convert to TFLite (float32, no quantization) ----
     converter = tf.lite.TFLiteConverter.from_keras_model(wrapper)
     converter.target_spec.supported_ops = [
         tf.lite.OpsSet.TFLITE_BUILTINS,
         tf.lite.OpsSet.SELECT_TF_OPS,
     ]
     converter._experimental_lower_tensor_list_ops = False
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-
-    suffix = ""
-    if quantize == "fp16":
-        converter.target_spec.supported_types = [tf.float16]
-        suffix = "_fp16"
 
     tflite_model = converter.convert()
-    tflite_path = output_dir / f"model_raw{suffix}.tflite"
+    tflite_path = output_dir / "model_raw.tflite"
     tflite_path.write_bytes(tflite_model)
     size_mb = len(tflite_model) / (1024 * 1024)
     print(f"  Saved: {tflite_path} ({size_mb:.2f} MB)")
@@ -166,10 +150,10 @@ def export_selfcontained_tflite(
 
 
 def convert_saved_model_to_tflite(
-    saved_model_dir, output_path, CONFIG, input_dim, quantization="fp16"
+    saved_model_dir, output_path, input_dim
 ):
     """Convert TensorFlow SavedModel to TFLite format."""
-    print(f"Converting to TFLite with quantization='{quantization}'...")
+    print("Converting to TFLite...")
 
     converter = tf.lite.TFLiteConverter.from_saved_model(str(saved_model_dir))
 
@@ -178,18 +162,6 @@ def convert_saved_model_to_tflite(
         tf.lite.OpsSet.SELECT_TF_OPS,
     ]
     converter._experimental_lower_tensor_list_ops = False
-
-    if quantization == "dynamic":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    elif quantization == "int8":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = lambda: [
-            [tf.random.normal((1, CONFIG["max_len"], input_dim))]
-        ]
-        converter.target_spec.supported_types = [tf.int8]
-    elif quantization == "fp16":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
 
     try:
         tflite_model = converter.convert()
@@ -224,7 +196,7 @@ def benchmark_tf_model(model, input_dim, max_len, n_runs=100):
 def benchmark_tflite_model(tflite_path, n_runs=100):
     """Benchmark TFLite model inference."""
     try:
-        interpreter = Interpreter(model_path=str(tflite_path))
+        interpreter = tf.lite.Interpreter(model_path=str(tflite_path))
         interpreter.allocate_tensors()
     except RuntimeError as e:
         print(

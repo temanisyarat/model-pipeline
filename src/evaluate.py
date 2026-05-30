@@ -130,4 +130,3 @@ def save_evaluation_results(eval_results, output_dir):
     np.save(output_dir / "predictions.npy", eval_results["predictions"])
 
     print(f"Evaluation results saved to {output_dir}")
-
