@@ -1,171 +1,154 @@
 #!/usr/bin/env python3
-"""Test the self-contained model with a .npz file.
-
-Usage:
-    python try.py                          # test a random sample
-    python try.py data/fredi/aku/aku_orig.npz  # test a specific file
-"""
+"""Test model_raw_int8.tflite accuracy on data/"""
 
 import sys
-import json
 from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
 
-sys.path.insert(0, str(Path(__file__).parent))
-from src.model import build_mobile_sign_gru
-from src.export import load_weights_from_savedmodel
 
 CLASSES = [
-    "aku", "apel", "ayah", "besok", "buku", "dia", "dua",
-    "hari ini", "ibu", "kamu", "kuning", "maaf", "merah",
-    "nama", "pisang", "salam", "satu", "teman",
-    "terima kasih", "tiga",
+    "aku",
+    "apel",
+    "ayah",
+    "besok",
+    "buku",
+    "dia",
+    "dua",
+    "hari ini",
+    "ibu",
+    "kamu",
+    "kuning",
+    "maaf",
+    "merah",
+    "nama",
+    "pisang",
+    "salam",
+    "satu",
+    "teman",
+    "terima kasih",
+    "tiga",
 ]
+CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
-# MediaPipe Pose landmark indices used by the model (from 33 total):
-# [0= nose, 11=left_shoulder, 12=right_shoulder,
-#  13=left_elbow, 14=right_elbow,
-#  15=left_wrist, 16=right_wrist,
-#  23=left_hip, 24=right_hip]
-# Hand order in the 153-d vector: 9 pose + left hand (21) + right hand (21)
 MAX_LEN = 125
+RAW_DIM = 153
 OUTPUT_DIR = Path("output")
 
 
 def load_raw_features(npz_path):
-    """Load .npz and extract raw (T, 153) landmarks (NaNs preserved)."""
     data = np.load(npz_path)
-    pose = data["pose"]                 # (T, 9, 4)
-    hands = data["hands"]               # (T, 2, 21, 3)
-    pose_xyz = pose[:, :, :3]           # (T, 9, 3)
-    hands_flat = hands.reshape(len(hands), -1)  # (T, 126)
-    raw = np.concatenate([
-        pose_xyz.reshape(len(pose), -1),
-        hands_flat,
-    ], axis=1)  # (T, 153)
+    pose = data["pose"]
+    hands = data["hands"]
+    pose_xyz = pose[:, :, :3]
+    hands_flat = hands.reshape(len(hands), -1)
+    raw = np.concatenate(
+        [
+            pose_xyz.reshape(len(pose), -1),
+            hands_flat,
+        ],
+        axis=1,
+    )
     return raw.astype(np.float32)
 
 
 def pad_to(seq, max_len):
-    """Pad or truncate to (max_len, D).
-    
-    Fills unused frames with NaN so the model's internal NaN detection
-    sets mask=0 for those positions (matching training behavior).
-    """
     T, D = seq.shape
     actual_len = min(T, max_len)
     out = np.empty((max_len, D), dtype=np.float32)
     out.fill(np.nan)
     out[:actual_len] = seq[:actual_len]
-    return out, actual_len
+    return out
 
 
-def build_model(config):
-    """Rebuild model and load weights from SavedModel."""
-    model = build_mobile_sign_gru(
-        input_dim=config["input_dim"],
-        num_classes=config["num_classes"],
-        max_len=MAX_LEN,
-        hidden_dim=config["hidden_dim"],
-        num_layers=config["num_layers"],
-        dropout=config["dropout"],
-        bidirectional=config["bidirectional"],
-        l2_reg=config.get("l2_reg", 1e-3),
-        conv_filters=config.get("conv_filters", [128, 128]),
-        conv_kernel_size=config.get("conv_kernel_size", 5),
-        spatial_dropout=config.get("spatial_dropout", 0.2),
-        recurrent_dropout=config.get("recurrent_dropout", 0.2),
-        use_mask_concat=config.get("use_mask_concat", True),
-    )
-    # Build
-    model(np.random.randn(1, MAX_LEN, config["input_dim"]).astype(np.float32), training=False)
-    load_weights_from_savedmodel(model, OUTPUT_DIR / "tf_saved_model")
-    return model
+def get_expected_label(npz_path):
+    return npz_path.parent.name
 
 
-def build_wrapper(model, global_mean, global_std, raw_dim=153):
-    """Wrap model with raw-input preprocessing."""
-    raw_input = tf.keras.Input(shape=(MAX_LEN, raw_dim), dtype="float32", name="raw_input")
-    mean_t = tf.constant(global_mean.reshape(1, 1, -1), dtype=tf.float32)
-    std_t = tf.constant(global_std.reshape(1, 1, -1), dtype=tf.float32)
-
-    valid_mask = tf.keras.layers.Lambda(
-        lambda x: tf.cast(tf.equal(x, x), tf.float32), name="nan_mask"
-    )(raw_input)
-    cleaned = tf.keras.layers.Lambda(
-        lambda x: tf.where(tf.not_equal(x, x), 0.0, x), name="nan_to_zero"
-    )(raw_input)
-    normalized = tf.keras.layers.Lambda(
-        lambda x: (x - mean_t) / (std_t + 1e-8), name="normalize"
-    )(cleaned)
-    preprocessed = tf.keras.layers.Concatenate(axis=-1, name="feat_mask_concat")(
-        [normalized, valid_mask]
-    )
-    return tf.keras.Model(raw_input, model(preprocessed), name="mobilesign_gru_raw")
+def scan_data(data_dir):
+    root = Path(data_dir)
+    samples = []
+    for person_dir in sorted(root.iterdir()):
+        if not person_dir.is_dir():
+            continue
+        for class_dir in sorted(person_dir.iterdir()):
+            if not class_dir.is_dir():
+                continue
+            class_name = class_dir.name
+            if class_name not in CLASS_TO_IDX:
+                continue
+            for npz_file in sorted(class_dir.glob("*.npz")):
+                samples.append((npz_file, class_name))
+    return samples
 
 
 def main():
-    # Pick input file
-    if len(sys.argv) > 1:
-        npz_path = Path(sys.argv[1])
-    else:
-        # Pick a random sample
-        from src.data import scan_dataset_with_signers
-        paths, labels, _ = scan_dataset_with_signers("data")
-        idx = np.random.randint(len(paths))
-        npz_path = Path(paths[idx])
-        label = labels[idx]
-        print(f"Random sample: {npz_path.name} (expected: {label})")
-
-    if not npz_path.exists():
-        print(f"File not found: {npz_path}")
+    tflite_path = OUTPUT_DIR / "model_raw.tflite"
+    if not tflite_path.exists():
+        print(f"Model not found: {tflite_path}")
         sys.exit(1)
 
-    # Load config and stats
-    with open(OUTPUT_DIR / "config.json") as f:
-        config = json.load(f)
+    print(f"Loading TFLite model from {tflite_path}")
+    interpreter = tf.lite.Interpreter(model_path=str(tflite_path))
+    interpreter.allocate_tensors()
 
-    global_mean = np.load(OUTPUT_DIR / "global_mean.npy")
-    global_std = np.load(OUTPUT_DIR / "global_std.npy")
-    raw_dim = config["input_dim"] // 2
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    print(
+        f"Input  shape: {input_details[0]['shape']}  dtype: {input_details[0]['dtype']}"
+    )
+    print(
+        f"Output shape: {output_details[0]['shape']} dtype: {
+            output_details[0]['dtype']
+        }"
+    )
 
-    print(f"Input: {npz_path}")
-    print(f"Config: max_len={config['max_len']}, raw_dim={raw_dim}, classes={config['num_classes']}")
+    samples = scan_data("data")
+    print(f"Total test samples: {len(samples)}")
+    if not samples:
+        print("No samples found. Check data/ directory.")
+        sys.exit(1)
 
-    # Build model
-    print("\nLoading model...")
-    model = build_model(config)
-    wrapper = build_wrapper(model, global_mean, global_std, raw_dim)
+    correct = 0
+    total = 0
+    class_correct = {c: 0 for c in CLASSES}
+    class_total = {c: 0 for c in CLASSES}
+    errors = []
 
-    # Load and prepare data
-    raw_feat = load_raw_features(npz_path)
-    print(f"Raw features: {raw_feat.shape}, NaNs: {np.isnan(raw_feat).sum()}")
-    padded, actual_len = pad_to(raw_feat, MAX_LEN)
-    print(f"Padded to: {padded.shape} ({actual_len} real frames)")
+    for npz_path, expected_label in samples:
+        raw_feat = load_raw_features(npz_path)
+        padded = pad_to(raw_feat, MAX_LEN)
+        input_data = padded[np.newaxis, ...].astype(np.float32)
 
-    # Run inference
-    logits = wrapper(padded[np.newaxis, ...], training=False).numpy()[0]
-    pred_class = int(np.argmax(logits))
-    probs = tf.nn.softmax(logits).numpy()
+        interpreter.set_tensor(input_details[0]["index"], input_data)
+        interpreter.invoke()
+        logits = interpreter.get_tensor(output_details[0]["index"])[0]
+        pred_idx = int(np.argmax(logits))
 
-    print(f"\nPrediction: {CLASSES[pred_class]} (class {pred_class})")
-    print(f"Confidence: {probs[pred_class]:.4f}")
-    print(f"\nTop-5 classes:")
-    for i in np.argsort(probs)[::-1][:5]:
-        print(f"  {CLASSES[i]:20s}  {probs[i]:.4f}")
+        expected_idx = CLASS_TO_IDX[expected_label]
+        is_correct = pred_idx == expected_idx
+        correct += is_correct
+        class_correct[expected_label] += is_correct
+        class_total[expected_label] += 1
+        total += 1
 
-    # If we know the expected label
-    if len(sys.argv) == 1:
-        expected_idx = CLASSES.index(label) if label in CLASSES else -1
-        if expected_idx == pred_class:
-            print(f"\n✓ Correct! (expected: {label})")
+        if not is_correct:
+            errors.append((npz_path, expected_label, CLASSES[pred_idx]))
+
+    for npz_path, exp, pred in errors:
+        print(f"  FAIL {npz_path}: expected={exp}, predicted={pred}")
+
+    print(f"\n{'=' * 50}")
+    print(f"  Accuracy: {correct}/{total} = {correct / total * 100:.2f}%")
+    print(f"{'=' * 50}")
+    print(f"\nPer-class accuracy:")
+    for c in CLASSES:
+        if class_total[c] > 0:
+            acc = class_correct[c] / class_total[c] * 100
+            print(f"  {c:20s}  {class_correct[c]:3d}/{class_total[c]:3d}  {acc:5.2f}%")
         else:
-            print(f"\n✗ Wrong! Expected: {label} (class {expected_idx})")
-
-    print("\nLogits:")
-    print(np.array2string(logits, precision=4, suppress_small=True))
+            print(f"  {c:20s}  no samples")
 
 
 if __name__ == "__main__":
