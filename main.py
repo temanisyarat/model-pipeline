@@ -30,108 +30,158 @@ def main():
     print(f"TensorFlow version: {tf.__version__}")
     print(f"GPUs available: {len(tf.config.list_physical_devices('GPU'))}")
 
-    K_FOLDS = 5
-    CURRENT_FOLD = 0
-
     all_paths, all_labels, all_signer_ids = scan_dataset_with_signers(DATA_DIR)
-    label_encoder_global = LabelEncoder()
-    label_encoder_global.fit(all_labels)
-    print(f"Global classes: {list(label_encoder_global.classes_)}")
+    label_encoder = LabelEncoder()
+    label_encoder.fit(all_labels)
+    print(f"Classes ({len(label_encoder.classes_)}): {list(label_encoder.classes_)}")
 
     unique_signers = sorted(set(all_signer_ids))
+    N = len(unique_signers)
+    print(f"Total signers: {N} — {len(all_paths)} samples")
+
     rng = random.Random(42)
     unique_signers_shuffled = unique_signers.copy()
     rng.shuffle(unique_signers_shuffled)
 
-    TEST_SIGNER = unique_signers_shuffled[-1]
-    train_val_signers = unique_signers_shuffled[:-1]
+    fold_results = []
+    best_test_acc = -1.0
+    best_model = None
+    best_fold_idx = 0
+    best_eval_results = None
+    best_history_obj = None
+    best_test_signer = None
 
-    print(f"Held-out test signer: {TEST_SIGNER}")
-    print(f"Train/val signers ({len(train_val_signers)}): {train_val_signers}")
+    for fold, test_signer in enumerate(unique_signers_shuffled):
+        print(f"\n{'='*60}")
+        print(f"FOLD {fold+1}/{N} — test: {test_signer}")
+        print(f"{'='*60}")
 
-    train_ds, val_ds, label_encoder, num_classes, signer_info = build_tf_dataloaders(
-        DATA_DIR,
-        max_len=CONFIG["max_len"],
-        batch_size=CONFIG["batch_size"],
-        k_folds=K_FOLDS,
-        current_fold=CURRENT_FOLD,
-        le_fitted=label_encoder_global,
-        augment=True,
-    )
+        train_val_paths = [
+            p for p, s in zip(all_paths, all_signer_ids) if s != test_signer
+        ]
+        train_val_labels = [
+            l for l, s in zip(all_labels, all_signer_ids) if s != test_signer
+        ]
+        train_val_signer_ids = [
+            s for s in all_signer_ids if s != test_signer
+        ]
+        train_val_signers = sorted(set(train_val_signer_ids))
+        k_folds = min(len(train_val_signers), 5)
 
-    test_paths = [p for p, s in zip(all_paths, all_signer_ids) if s == TEST_SIGNER]
-    test_labels_list = [
-        l for l, s in zip(all_labels, all_signer_ids) if s == TEST_SIGNER
-    ]
-    test_ds = create_tf_dataset(
-        test_paths,
-        test_labels_list,
-        label_encoder_global,
-        signer_info["global_mean"],
-        signer_info["global_std"],
-        batch_size=CONFIG["batch_size"],
-        shuffle=False,
-        augment=False,
-    )
-    print(f"Test set size: {len(test_paths)} samples")
+        train_ds, val_ds, le, num_classes, signer_info = build_tf_dataloaders(
+            DATA_DIR,
+            max_len=CONFIG["max_len"],
+            batch_size=CONFIG["batch_size"],
+            k_folds=k_folds,
+            current_fold=0,
+            le_fitted=label_encoder,
+            augment=True,
+            paths=train_val_paths,
+            labels=train_val_labels,
+            signer_ids=train_val_signer_ids,
+        )
 
-    print("\nBuilding TensorFlow MobileSignGRU model...")
-    input_dim = MODEL_INPUT_DIM
-    CONFIG["num_classes"] = num_classes
+        test_paths = [
+            p for p, s in zip(all_paths, all_signer_ids) if s == test_signer
+        ]
+        test_labels_list = [
+            l for l, s in zip(all_labels, all_signer_ids) if s == test_signer
+        ]
+        test_ds = create_tf_dataset(
+            test_paths,
+            test_labels_list,
+            label_encoder,
+            signer_info["global_mean"],
+            signer_info["global_std"],
+            batch_size=CONFIG["batch_size"],
+            shuffle=False,
+            augment=False,
+        )
+        print(f"  Train/val signers: {len(train_val_signers)} | "
+              f"Test: {test_signer} ({len(test_paths)} samples)")
 
-    model = build_mobile_sign_gru(
-        input_dim=input_dim,
-        num_classes=num_classes,
-        max_len=CONFIG["max_len"],
-        hidden_dim=CONFIG["hidden_dim"],
-        num_layers=CONFIG["num_layers"],
-        dropout=CONFIG["dropout"],
-        bidirectional=CONFIG["bidirectional"],
-        l2_reg=CONFIG.get("l2_reg", 1e-3),
-        conv_filters=CONFIG.get("conv_filters", [128, 128]),
-        conv_kernel_size=CONFIG.get("conv_kernel_size", 5),
-        spatial_dropout=CONFIG.get("spatial_dropout", 0.2),
-        recurrent_dropout=CONFIG.get("recurrent_dropout", 0.2),
-        use_mask_concat=CONFIG.get("use_mask_concat", True),
-    )
-    model.summary()
+        input_dim = MODEL_INPUT_DIM
+        CONFIG["num_classes"] = num_classes
+
+        model = build_mobile_sign_gru(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            max_len=CONFIG["max_len"],
+            hidden_dim=CONFIG["hidden_dim"],
+            num_layers=CONFIG["num_layers"],
+            dropout=CONFIG["dropout"],
+            bidirectional=CONFIG["bidirectional"],
+            l2_reg=CONFIG.get("l2_reg", 1e-3),
+            conv_filters=CONFIG.get("conv_filters", [128, 128]),
+            conv_kernel_size=CONFIG.get("conv_kernel_size", 5),
+            spatial_dropout=CONFIG.get("spatial_dropout", 0.2),
+            recurrent_dropout=CONFIG.get("recurrent_dropout", 0.2),
+            use_mask_concat=CONFIG.get("use_mask_concat", True),
+        )
+        if fold == 0:
+            model.summary()
+            param_count = model.count_params()
+            model_size_mb = sum(w.numpy().nbytes for w in model.weights) / (1024 * 1024)
+            print(f"Parameters: {param_count:,}  Size: {model_size_mb:.2f} MB")
+
+        steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
+        if steps_per_epoch < 0:
+            n_train = len([
+                p for p, s in zip(all_paths, all_signer_ids)
+                if s != test_signer and s not in signer_info["val_signers"]
+            ])
+            steps_per_epoch = max(1, n_train // CONFIG["batch_size"])
+
+        val_steps = tf.data.experimental.cardinality(val_ds).numpy()
+        if val_steps < 0:
+            val_steps = None
+
+        model, history_obj = train_tf_model(
+            train_ds, val_ds, CONFIG, num_classes, input_dim,
+            steps_per_epoch, val_steps,
+        )
+
+        test_loss, test_acc = model.evaluate(test_ds)
+        eval_results = evaluate_model(model, test_ds, label_encoder)
+        print(f"  >>> Fold {fold+1} test accuracy: {test_acc:.4f}")
+
+        fold_results.append({
+            "test_signer": test_signer,
+            "test_accuracy": float(test_acc),
+            "val_accuracy": float(max(history_obj.history.get("val_accuracy", [0]))),
+        })
+
+        if test_acc > best_test_acc:
+            best_test_acc = test_acc
+            best_model = model
+            best_fold_idx = fold
+            best_eval_results = eval_results
+            best_history_obj = history_obj
+            best_test_signer = test_signer
+
+    test_accs = [r["test_accuracy"] for r in fold_results]
+    print(f"\n{'='*60}")
+    print(f"CROSS-VALIDATION RESULTS ({N} folds)")
+    print(f"{'='*60}")
+    for r in fold_results:
+        print(f"  {r['test_signer']:<12}  test_acc={r['test_accuracy']:.4f}")
+    print(f"  {'─'*40}")
+    print(f"  Mean:   {np.mean(test_accs):.4f} ± {np.std(test_accs):.4f}")
+    print(f"  Median: {np.median(test_accs):.4f}")
+    print(f"  Best:   {best_test_signer} ({best_test_acc:.4f})")
+
+    print(f"\n{'='*60}")
+    print(f"Exporting best model (fold {best_fold_idx+1})")
+    print(f"{'='*60}")
+
+    model = best_model
+    history_obj = best_history_obj
+    eval_results = best_eval_results
+
+    np.save(OUTPUT_DIR / "history.npy", history_obj.history)
 
     param_count = model.count_params()
     model_size_mb = sum(w.numpy().nbytes for w in model.weights) / (1024 * 1024)
-    print(f"Model parameters: {param_count:,}")
-    print(f"Model size: {model_size_mb:.2f} MB")
-
-    print("\nStarting training pipeline...")
-
-    steps_per_epoch = tf.data.experimental.cardinality(train_ds).numpy()
-    if steps_per_epoch < 0:
-        n_train = len(
-            [
-                s
-                for s in all_signer_ids
-                if s != TEST_SIGNER and s not in signer_info["val_signers"]
-            ]
-        )
-        steps_per_epoch = max(1, n_train // CONFIG["batch_size"])
-
-    val_steps = tf.data.experimental.cardinality(val_ds).numpy()
-    if val_steps < 0:
-        val_steps = None
-
-    model, history_obj = train_tf_model(
-        train_ds, val_ds, CONFIG, num_classes, input_dim, steps_per_epoch, val_steps
-    )
-
-    fold_results = [
-        {
-            "history": history_obj.history,
-            "accuracy": max(history_obj.history.get("val_accuracy", [0])),
-        }
-    ]
-    best_fold_idx = 0
-
-    best_history = fold_results[best_fold_idx].get("history", {})
-    np.save(OUTPUT_DIR / "history.npy", best_history)
 
     CONFIG_for_export = {
         "input_dim": input_dim,
@@ -147,50 +197,37 @@ def main():
         "use_mask_concat": CONFIG.get("use_mask_concat", True),
         "spatial_dropout": CONFIG.get("spatial_dropout", 0.2),
         "recurrent_dropout": CONFIG.get("recurrent_dropout", 0.2),
-        "num_params": int(model.count_params()),
+        "num_params": int(param_count),
         "model_size_mb": round(model_size_mb, 3),
         "label_classes": list(label_encoder.classes_),
+        "cross_val_accuracy_mean": float(np.mean(test_accs)),
+        "cross_val_accuracy_std": float(np.std(test_accs)),
+        "best_test_signer": best_test_signer,
+        "best_test_accuracy": float(best_test_acc),
     }
 
     with open(OUTPUT_DIR / "config.json", "w") as f:
         json.dump(CONFIG_for_export, f, indent=2)
 
-    print(f"Model history and CONFIG saved to {OUTPUT_DIR}")
-
-    print("\nTraining complete. Evaluating on held-out test set...")
-    test_loss, test_acc = model.evaluate(test_ds)
-    print(f"\nFinal Test Accuracy (held-out signer {TEST_SIGNER}): {test_acc:.4f}")
-
-    eval_results = evaluate_model(model, test_ds, label_encoder_global)
-
-    print("\nPlotting results...")
     plot_training_history(history_obj, OUTPUT_DIR)
     plot_confusion_matrix(eval_results, OUTPUT_DIR)
     save_evaluation_results(eval_results, OUTPUT_DIR)
 
-    param_count = model.count_params()
-    model_size_mb = sum(w.numpy().nbytes for w in model.weights) / (1024 * 1024)
-    print(f"\nModel parameters: {param_count:,}")
-    print(f"Model size in RAM: {model_size_mb:.2f} MB")
-
-    print("\nBenchmarking TF model inference speed...")
+    print("\nBenchmarking TF model...")
     bench_tf = benchmark_tf_model(model, input_dim, CONFIG["max_len"])
-    print(
-        f"  TF Model: {bench_tf['ms_per_sample']:.3f} ms/sample ({
-            bench_tf['fps']:.1f} fps)"
-    )
+    print(f"  {bench_tf['ms_per_sample']:.3f} ms/sample ({bench_tf['fps']:.1f} fps)")
 
     print("\nExporting to TFLite...")
     saved_model_path = OUTPUT_DIR / "tf_saved_model"
     model.export(saved_model_path)
-    print(f"SavedModel exported to {saved_model_path}")
+    print(f"  SavedModel → {saved_model_path}")
 
     tflite_path = OUTPUT_DIR / "model.tflite"
     tflite_file, tflite_size = convert_saved_model_to_tflite(
         saved_model_path, tflite_path, input_dim
     )
 
-    print("\nExporting self-contained TFLite (accepts raw landmarks)...")
+    print("\nExporting self-contained TFLite (raw landmarks)...")
     export_selfcontained_tflite(
         model=model,
         data_paths=all_paths,
@@ -198,51 +235,18 @@ def main():
         output_dir=OUTPUT_DIR,
     )
 
-    print("Benchmarking TFLite model...")
+    print("\nBenchmarking TFLite...")
     tflite_bench = benchmark_tflite_model(tflite_path)
-
     if tflite_bench is not None:
-        print(
-            f"TFLite inference: {tflite_bench['mean_ms']:.3f} +/- {
-                tflite_bench['std_ms']:.3f} ms ({tflite_bench['fps']:.1f} fps)"
-        )
+        print(f"  {tflite_bench['mean_ms']:.3f} ± {tflite_bench['std_ms']:.3f} ms "
+              f"({tflite_bench['fps']:.1f} fps)")
 
-    print("\n" + "=" * 60)
-    print("BISINDO SIGN LANGUAGE RECOGNITION - PIPELINE COMPLETE")
-    print("=" * 60)
-
-    print("\nModel Summary:")
-    print(f"   Input dim: {input_dim}")
-    print(f"   Hidden dim: {CONFIG['hidden_dim']}")
-    print(f"   Layers: {CONFIG['num_layers']}")
-    print(f"   Bidirectional: {CONFIG['bidirectional']}")
-    print(f"   Classes: {num_classes} ({', '.join(label_encoder.classes_)})")
-
-    print("\nModel Sizes:")
-    print(f"   TF SavedModel (FP32): {model_size_mb:.2f} MB")
-    print(f"   TFLite (FP32):        {tflite_size:.2f} MB")
-    print(f"   TFLite Raw Input:     model_raw.tflite")
-
-    print("\nPerformance:")
-    print(f"   TF Inference:    {bench_tf['ms_per_sample']:.3f} ms/sample")
-
-    if tflite_bench is not None:
-        print(f"   TFLite Inference: {tflite_bench['mean_ms']:.3f} ms/sample")
-    else:
-        print("   TFLite Inference: Benchmarking failed due to unsupported operations.")
-
-    print("\nTest Evaluation:")
-
-    print(f"   Accuracy:  {eval_results['accuracy']:.4f}")
-    print(f"   F1-macro:  {eval_results['f1_macro']:.4f}")
-    print(f"   Precision: {eval_results['precision']:.4f}")
-    print(f"   Recall:    {eval_results['recall']:.4f}")
-
-    print("\nOutput Files:")
-    for f in sorted(OUTPUT_DIR.glob("*")):
-        if f.is_file():
-            size = f.stat().st_size / (1024 * 1024)
-            print(f"   {f.name}: {size:.2f} MB")
+    print(f"\n{'='*60}")
+    print("BISINDO SIGN LANGUAGE RECOGNITION — PIPELINE COMPLETE")
+    print(f"{'='*60}")
+    print(f"\nFinal cross-val accuracy: {np.mean(test_accs):.4f} ± {np.std(test_accs):.4f}")
+    print(f"Best model (fold {best_fold_idx+1}): {best_test_signer} = {best_test_acc:.4f}")
+    print(f"\nOutput files in {OUTPUT_DIR}/")
 
 
 if __name__ == "__main__":

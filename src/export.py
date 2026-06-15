@@ -38,14 +38,22 @@ def load_weights_from_savedmodel(model, saved_model_dir):
         p = dst_var.path
         if p in src_map:
             dst_var.assign(src_map[p].read_value())
-        elif "/" in p:
-            parts = p.rsplit("/", 1)
-            alt = f"{parts[0]}_1/{parts[1]}"
-            if alt in src_map:
-                dst_var.assign(src_map[alt].read_value())
-            else:
-                unmatched.append(p)
-        else:
+            continue
+        # Try matching with any _N suffix (e.g. dense_5/kernel -> dense/kernel)
+        matched = False
+        for src_name in src_map:
+            # Check if src_name = base_N/rest and dst = base/rest
+            src_parts = src_name.rsplit("/", 1)
+            if len(src_parts) == 2:
+                src_base, src_rest = src_parts
+                dst_base, dst_rest = p.rsplit("/", 1)
+                if src_rest == dst_rest and src_base.startswith(dst_base + "_"):
+                    suffix = src_base[len(dst_base):]
+                    if suffix.lstrip("_").isdigit():
+                        dst_var.assign(src_map[src_name].read_value())
+                        matched = True
+                        break
+        if not matched:
             unmatched.append(p)
 
     if unmatched:
@@ -55,6 +63,9 @@ def load_weights_from_savedmodel(model, saved_model_dir):
     else:
         print("  All weights loaded successfully.")
     return len(model.weights) - len(unmatched)
+
+
+
 
 
 def export_selfcontained_tflite(
@@ -69,6 +80,7 @@ def export_selfcontained_tflite(
     The resulting model accepts raw (125, 153) landmarks (with NaNs for
     undetected keypoints) and handles NaN detection, masking, and
     normalization internally -- no external preprocessing needed.
+    Uses a custom RawPreprocessor layer with TFLite-native ops.
     """
     output_dir = Path(output_dir)
     max_len = int(config["max_len"])
@@ -107,26 +119,32 @@ def export_selfcontained_tflite(
         )
         load_weights_from_savedmodel(model, saved_model_dir)
 
-    # ---- Build wrapper ----
+    # ---- Build wrapper with matching normalization ----
     print("Building self-contained wrapper model...")
     raw_input = tf.keras.Input(
         shape=(max_len, raw_dim), dtype="float32", name="raw_input"
     )
+    m = global_mean.reshape(1, 1, -1).astype(np.float32)
+    s = global_std.reshape(1, 1, -1).astype(np.float32)
 
-    mean_t = tf.constant(global_mean.reshape(1, 1, -1), dtype=tf.float32)
-    std_t = tf.constant(global_std.reshape(1, 1, -1), dtype=tf.float32)
-
+    # Step 1: valid_mask = 1 for valid landmarks, 0 for NaN/padding
     valid_mask = tf.keras.layers.Lambda(
-        lambda x: tf.cast(tf.equal(x, x), tf.float32), name="nan_mask"
+        lambda x: tf.cast(tf.logical_not(tf.math.is_nan(x)), tf.float32),
+        name="valid_mask",
     )(raw_input)
-    cleaned = tf.keras.layers.Lambda(
-        lambda x: tf.where(tf.not_equal(x, x), 0.0, x), name="nan_to_zero"
-    )(raw_input)
+    # Step 2: NaN → 0, then normalise ALL values
     normalized = tf.keras.layers.Lambda(
-        lambda x: (x - mean_t) / (std_t + 1e-8), name="normalize"
-    )(cleaned)
+        lambda x, m_val=tf.constant(m), s_val=tf.constant(s):
+            (tf.where(tf.math.is_nan(x), tf.zeros_like(x), x) - m_val) / (s_val + 1e-8),
+        name="normalize",
+    )(raw_input)
+    # Step 3: zero-out NaN/padding positions after normalisation
+    masked_normalized = tf.keras.layers.Lambda(
+        lambda x: x[0] * x[1], name="apply_mask",
+    )([normalized, valid_mask])
+    # Step 4: concat features + mask
     preprocessed = tf.keras.layers.Concatenate(axis=-1, name="feat_mask_concat")(
-        [normalized, valid_mask]
+        [masked_normalized, valid_mask]
     )
     outputs = model(preprocessed)
     wrapper = tf.keras.Model(raw_input, outputs, name="mobilesign_gru_raw")
