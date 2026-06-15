@@ -7,20 +7,20 @@ print(f"GPUs available: {len(tf.config.list_physical_devices('GPU'))}")
 
 
 CONFIG = {
-    "max_len": 125,
+    "max_len": 110,
     "batch_size": 64,
     "input_dim": 153,
     "num_classes": 20,
-    "hidden_dim": 192,
+    "hidden_dim": 128,
     "num_layers": 2,
-    "dropout": 0.3,
-    "recurrent_dropout": 0.2,
+    "dropout": 0.5,
+    "recurrent_dropout": 0.3,
     "bidirectional": True,
     "learning_rate": 3e-4,
     "epochs": 100,
-    "patience": 20,
-    "label_smoothing": 0.1,
-    "l2_reg": 1e-3,
+    "patience": 15,
+    "label_smoothing": 0.2,
+    "l2_reg": 3e-3,
     "gradient_clip_norm": 1.0,
     "conv_filters": [128, 128],
     "conv_kernel_size": 5,
@@ -43,7 +43,7 @@ CLASSES = [
     "buku",
     "dia",
     "dua",
-    "hari ini",
+    "hari-ini",
     "ibu",
     "kamu",
     "kuning",
@@ -54,7 +54,7 @@ CLASSES = [
     "salam",
     "satu",
     "teman",
-    "terima kasih",
+    "terima-kasih",
     "tiga",
 ]
 
@@ -68,4 +68,3 @@ print("Configuration loaded.")
 print(f"Classes: {CLASSES}")
 print(f"Dataset path: {DATA_DIR}")
 print(f"Output directory: {OUTPUT_DIR}")
-

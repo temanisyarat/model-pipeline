@@ -120,12 +120,12 @@ def augment_sequence(feat, label):
     feat_shape = tf.shape(feat)
     # batch_size, T, D = feat_shape[0], feat_shape[1], feat_shape[2]
     T = feat_shape[1]
-    noise = tf.random.normal(tf.shape(feat), mean=0.0, stddev=0.02)
+    noise = tf.random.normal(tf.shape(feat), mean=0.0, stddev=0.03)
     feat = feat + noise
     channel_drop_prob = tf.random.uniform(tf.shape(feat))
-    channel_drop = tf.cast(channel_drop_prob > 0.05, tf.float32)
+    channel_drop = tf.cast(channel_drop_prob > 0.10, tf.float32)
     feat = feat * channel_drop
-    mask_len = tf.random.uniform([], 3, 12, dtype=tf.int32)
+    mask_len = tf.random.uniform([], 5, 20, dtype=tf.int32)
     max_start = tf.maximum(1, T - mask_len)
     mask_start = tf.random.uniform([], 0, max_start, dtype=tf.int32)
     time_mask = tf.ones([T], dtype=tf.float32)
@@ -172,12 +172,16 @@ def build_tf_dataloaders(
     root_dir,
     max_len=150,
     batch_size=32,
-    k_folds=5,
+    k_folds=9,
     current_fold=0,
     le_fitted=None,
     augment=True,
+    paths=None,
+    labels=None,
+    signer_ids=None,
 ):
-    paths, labels, signer_ids = scan_dataset_with_signers(root_dir)
+    if paths is None or labels is None or signer_ids is None:
+        paths, labels, signer_ids = scan_dataset_with_signers(root_dir)
 
     le = le_fitted if le_fitted is not None else LabelEncoder().fit(labels)
     unique_signers = sorted(set(signer_ids))
